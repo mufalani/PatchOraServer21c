@@ -1,0 +1,123 @@
+---
+# Tasks for patching Oracle 21c Database with OCT 21 RU
+# Autor: Rodrigo Mufalani
+# Date: 28/10/2021
+# Laouc 
+
+  - name: Oracle Server 21c patching with OCT2021 RU 
+    hosts: oel82
+    vars:
+        ora_base_dir: /u01/app/oracle 
+        ora_home_dir: /u01/app/oracle/product/21c/db1
+        ora_inv_dir: /u01/app/oraInventory
+        ora_inst_dir: /tmp
+        patch_dir: /home/oracle/33239276
+    tasks: 
+
+    # Rename opatch folder on destination server
+      - name:
+        become_user: oracle
+        copy:
+          remote_src: true 
+          src: "{{ ora_home_dir }}/OPatch"
+          dest: "{{ ora_home_dir }}/OPatch.old"
+          owner: oracle
+          group: oinstall
+          mode: 0775
+
+    # Copy new version of OPatch to OH 
+      - name:
+        become_user: oracle
+        unarchive: 
+          src: p6880880_210000_Linux-x86-64.zip 
+          dest: "{{ ora_home_dir }}"
+          copy: yes
+          owner: oracle
+          group: oinstall
+          mode: 0775
+
+    # Copy patch 33239276 to /home/oracle folder 
+      - name:
+        become_user: oracle
+        unarchive: 
+          src: p33239276_210000_Linux-x86-64.zip 
+          dest: /home/oracle
+          copy: yes
+          owner: oracle
+          group: oinstall
+          mode: 0775
+
+    # Copy shutdown.sh to /home/oracle folder 
+      - name:
+        copy: 
+          src: shutdown.sh 
+          dest: /home/oracle/shutdown.sh
+          owner: oracle
+          group: oinstall
+          mode: 0775
+
+    # Copy startup.sh to /home/oracle folder 
+      - name:
+        copy: 
+          src: startup.sh 
+          dest: /home/oracle/startup.sh
+          owner: oracle
+          group: oinstall
+          mode: 0775
+
+    # Stop the database and listener
+      - name: 
+        become_user: oracle
+        shell: "/home/oracle/shutdown.sh" 
+
+   # Check processes for safety 
+      - name:
+        become_user: oracle
+        shell: ps -ef | grep "smon\|lsn" | grep -v grep | wc -l 
+        register: process_status
+        failed_when: '"0" not in process_status.stdout'
+
+   # Check opatch conflict
+      - name:
+        become_user: oracle
+        shell: "{{ ora_home_dir }}/OPatch/opatch prereq CheckConflictAgainstOHWithDetail -ph {{ patch_dir }}"
+        register: opatch_status
+        environment:
+          ORACLE_BASE: "{{ ora_base_dir }}"
+          ORACLE_HOME: "{{ ora_home_dir }}"
+          PATH: "{{ ora_home_dir }}/bin:{{ ora_home_dir }}/OPatch:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin"
+          LD_LIBRARY_PATH: "{{ ora_home_dir }}/lib:/lib:/usr/lib"
+          CLASSPATH: "{{ ora_home_dir }}/jlib:{{ ora_home_dir }}/rdbms/jlib"
+        failed_when: '"passed" not in opatch_status.stdout'
+
+   # Apply the patch on selected home 
+      - name:
+        become_user: oracle
+        shell: "{{ ora_home_dir }}/OPatch/opatch apply -silent -oh {{ ora_home_dir }} {{ patch_dir }}"
+        register: opatch_apply_status
+        environment:
+          ORACLE_BASE: "{{ ora_base_dir }}"
+          ORACLE_HOME: "{{ ora_home_dir }}"
+          PATH: "{{ ora_home_dir }}/bin:{{ ora_home_dir }}/OPatch:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin"
+          LD_LIBRARY_PATH: "{{ ora_home_dir }}/lib:/lib:/usr/lib"
+          CLASSPATH: "{{ ora_home_dir }}/jlib:{{ ora_home_dir }}/rdbms/jlib"
+        failed_when: '"Patch 33239276 successfully applied" not in opatch_apply_status.stdout'
+
+    # Start the database and listener
+      - name: 
+        become_user: oracle
+        shell: "/home/oracle/startup.sh" 
+
+    # Data dictionary patch 
+      - name: 
+        become_user: oracle
+        shell: "export ORACLE_SID=prd; {{ ora_home_dir }}/OPatch/datapatch -verbose"
+        register: datapatch_status
+        environment: 
+          ORACLE_BASE: "{{ ora_base_dir }}" 
+          ORACLE_HOME: "{{ ora_home_dir }}"
+          PATH: "{{ ora_home_dir }}/bin:{{ ora_home_dir }}/OPatch:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin"
+          LD_LIBRARY_PATH: "{{ ora_home_dir }}/lib:/lib:/usr/lib"
+          CLASSPATH: "{{ ora_home_dir }}/jlib:{{ ora_home_dir }}/rdbms/jlib"
+          ORACLE_SID: prd
+        failed_when: '"Patch installation complete" not in datapatch_status.stdout'
